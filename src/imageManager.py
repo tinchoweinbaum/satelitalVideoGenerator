@@ -1,16 +1,8 @@
 import os
-from time import sleep
-import requests
-import datetime
 from typing import List
-
-from link import Link
 from log import Log
-from utilities import Util
-from errorManager import ErrorManager
-# se encarga de obtener las imagenes del satelite
+from imageDownloader import ImageDownloader
 
-bestTryOrder = [20, 21, 19, 22, 18, 23, 17, 24, 16, 25, 32, 15, 31, 14, 30, 13, 29, 12, 28, 11, 27, 10, 26, 9, 8, 7, 6, 5, 4, 3, 2, 1]
 
 class ImageManager:
 
@@ -18,6 +10,12 @@ class ImageManager:
 
     def __init__(self, satelite: str):
         self.satelite = satelite
+        self.downloader = ImageDownloader()
+        self.groupId = ""
+        if satelite == "ARG":
+            self.groupId = "TOP_C13_ARG_ALTA"
+        elif satelite == "CEN":
+            self.groupId = "TOP_C13_CEN_ALTA"
     
     def checkBuffer(self) -> bool:
         # se verifica que exista el directorio buffer
@@ -37,117 +35,69 @@ class ImageManager:
         
         return True
 
-    def isInBuffer(self, link: Link) -> bool:
-        # se verifica que la imagen no se encuentre en el buffer
-        for seg in bestTryOrder:
-            link.setSecond(seg)
-            if link.getFilename() in os.listdir("buffer/" + link.getFolder()):
-                return True
-        return False
-
-    # descarga una imágen y devuelve su nombre
-    def downloadImage(self, date: datetime.datetime) -> str:
-        
-        # se crea el link y se le agrega la fecha
-        link = Link(satelite=self.satelite)
-        link.setDate(Util.roundTime(date))
-        
-        # si la imagen ya se encuentra en el buffer, no se descarga
-        if self.isInBuffer(link):
-            return link.getFilename()
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 6.1; WOW64; rv:20.0) Gecko/20100101 Firefox/20.0, Accept',
-                   'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                   'Acept-Language': 'es-AR,es;q=0.8'}
-        # se intenta descargar la imagen
-        request = requests.get(link.getFinalLink(), headers=headers)
-
-        i = 0
-        # en el caso de que no se encuentre se cambian los segundos de la fecha del link
-        while request.status_code == 404 and i < len(bestTryOrder):
-            link.setSecond(bestTryOrder[i])
-            request = requests.get(link.getFinalLink(), headers=headers)
-            i += 1
-
-        # si se encuentra la imagen, se guarda en el buffer
-        if request.status_code == 200:
-            
-            self.checkBuffer()
-
-            # se genera el nombre del archivo
-            filename = link.getFilename()
-            with open("buffer/" + link.getFolder() + filename, 'wb') as f:
-                f.write(request.content)
-                f.close()
-                
-            Log.imageDownloaded(link.getFolder() + filename)
-            return filename
-        
-        if request.status_code != 200:
-            ErrorManager.manageDownloadError(link.getFinalLink(), request)
-            return None
-        
-
-    # descarga la cantidad de imágenes especificadas   
-    def downloadIntImages(self, amount:int):
-        dates = Util.generateDates(amount)
-        
-        self.checkBuffer()
-
-        for date in dates:
-            self.downloadImage(date)
-
     # devuelve una lista de imágenes con las imágenes que se encuentran en el buffer
     def getImageList(self) -> List[str]:
         if not self.checkBuffer():
             return []
-        return [os.path.join("buffer/" + self.satelite + "/" + archivo) for archivo in os.listdir("buffer/" + self.satelite)]
+        # Sort to ensure order
+        return sorted([os.path.join("buffer/" + self.satelite + "/" + archivo) for archivo in os.listdir("buffer/" + self.satelite)])
 
-    # actualiza el buffer y maneja los errores
-    def updateBuffer(self):
-        tries = 0
-        maxTries = 20
-        imageDownloaded = self.downloadImage(Util.getLastAvailableDate())
-
-        # si no se pudo descargar la imagen, se intenta hasta que se descargue o se llegue al máximo de intentos
-        while not imageDownloaded and tries != maxTries:
-            imageDownloaded = self.downloadImage(Util.getLastAvailableDate())
-            Log.bufferFailedDownloadTry(tries + 1)
-            tries += 1
-            sleep(10)
+    def saveImage(self, filename: str, content: bytes) -> str:
+        self.checkBuffer()
         
-        # si se llega al máximo de intentos, se da por vencido
-        if tries == maxTries:
-            Log.bufferGaveUp()
+        # se guarda la imagen en el buffer
+        path = "buffer/" + self.satelite + "/" + filename
+        with open(path, 'wb') as f:
+            f.write(content)
+        
+        Log.imageDownloaded(path) 
+        
+        # Limpieza: si hay más de 24 imágenes, borra la más vieja
+        self.cleanBuffer()
+        return filename
+
+    def cleanBuffer(self):
+        # si existen mas de 24 imagenes en el buffer, borra la mas vieja
+        files = sorted(os.listdir("buffer/" + self.satelite))
+        while len(files) > 24:
+            toRemove = self.satelite + "/" + files[0]
+            os.remove("buffer/" + toRemove)
+            Log.imageDeleted("buffer/" + toRemove)
+            files = sorted(os.listdir("buffer/" + self.satelite))
+
+    def updateBuffer(self):
+        """
+        Consults the API for the latest images and downloads any that are missing.
+        """
+        if not self.groupId:
+            Log.write(f"No Group ID for satellite {self.satelite}", 2)
             return
 
-        # si se descargó la imagen, se borra la más vieja del buffer (si es que hay más de 24 imágenes)
-        toRemove = "None"
-        if tries < maxTries:
-            if len(os.listdir("buffer/" + self.satelite)) > 24:
-                toRemove = self.satelite + "/" + os.listdir("buffer/" + self.satelite)[0]
-                os.remove("buffer/" + toRemove)
-            Log.bufferUpdated(imageDownloaded, toRemove)
-
-    # TODO: decidir si se va a usar
-    # def securityCheck(self): 
-    #     bufferLen = len(os.listdir("buffer"))
+        available_images = self.downloader.get_available_images(self.groupId)
+        if not available_images:
+            return
         
-    #     if bufferLen == 24:
-    #         return True
+        # Ensure they are sorted so we process chronologically
+        available_images.sort()
+
+        self.checkBuffer()
+        current_files = os.listdir(f"buffer/{self.satelite}")
         
-    #     if bufferLen < 24:
-    #         # updatea todo el buffer
-    #         return False
-            
-    #     if bufferLen > 24:
-    #         # borra las imagenes de más
-    #         return False
+        # Download missing images
+        # We focus on the latest ones. The API returns the last 24.
+        for image_name in available_images:
+            if image_name not in current_files:
+                Log.write(f"Downloading new image: {image_name}", 0)
+                content = self.downloader.download_image(image_name)
+                if content:
+                    self.saveImage(image_name, content)
+        
+        self.cleanBuffer()
 
-
-# w1 = ImageManager("CEN")
-# w1.downloadIntImages(24)
-
-# w2 = ImageManager("ARG")
-# w2.downloadIntImages(24)
-
-# print(requests.get("https://estaticos.smn.gob.ar/vmsr/satelite/TOP_C13_ARG_ALTA_20230628_182020Z.jpg"))
+    def downloadIntImages(self, amount: int):
+        """
+        Downloads initial images. 
+        With the API, we just call updateBuffer which fetches the valid list (max 24).
+        If 'amount' is just a placeholder for 'fill the buffer', updateBuffer does it.
+        """
+        self.updateBuffer()

@@ -79,22 +79,26 @@ class VideoGenerator:
         return concatenate(video_list, method="compose") 
 
     def generateFinalVideo(self, sequence: ImageSequenceClip, total_frames: int):
-        sequence.duration = total_frames # iguala la duración de la secuencia de imágenes con la cantidad de frames
+        try:
+            sequence.duration = total_frames # iguala la duración de la secuencia de imágenes con la cantidad de frames
 
-        # crea el fondo como una secuencia de imágenes con la misma cantidad de frames que la secuencia de imágenes
-        background_clip = ImageSequenceClip([self.background] * (total_frames + 1), durations=[1] * (total_frames), 
-                                            fps=self.fps) # ni idea pq hay q agregar un frame de más pero si no lo hago queda mal
-        
-        # une el fondo con la secuencia de imágenes
-        final_clip = CompositeVideoClip([background_clip, sequence], size=(self.width, self.height))
+            # crea el fondo como una secuencia de imágenes con la misma cantidad de frames que la secuencia de imágenes
+            background_clip = ImageSequenceClip([self.background] * (total_frames + 1), durations=[1] * (total_frames), 
+                                                fps=self.fps) # ni idea pq hay q agregar un frame de más pero si no lo hago queda mal
+            
+            # une el fondo con la secuencia de imágenes
+            final_clip = CompositeVideoClip([background_clip, sequence], size=(self.width, self.height))
 
-        Log.videoRenderingStarted()
-        with suppress_stdout():
-            # renderiza el video
-            final_clip.write_videofile(self.path + self.fileName + self.extension, audio=False, codec=self.codec, 
-                                    bitrate=self.bitrate, threads=self.threads)
+            Log.videoRenderingStarted()
+            with suppress_stdout():
+                # renderiza el video
+                final_clip.write_videofile(self.path + self.fileName + self.extension, audio=False, codec=self.codec, 
+                                        bitrate=self.bitrate, threads=self.threads)
 
-        Log.videoUpdated()
+            Log.videoUpdated()
+        except Exception as e:
+            print(f"[ERROR] Failed to generate final video: {e}")
+            raise
 
     # globaliza todas las funciones
     def imagesToVideo(self, image_lists: List[List[str]], repeats: int):

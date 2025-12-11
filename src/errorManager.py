@@ -29,6 +29,11 @@ class ErrorManager:
     
     @staticmethod
     def fatalError(e: Exception):
-        Log.write(str(e), 2)
-        
-        exit(1) 
+        try:
+            print(f"[FATAL ERROR] {e}")
+            Log.write(str(e), 2)
+        except Exception as log_error:
+            print(f"[CRITICAL] Failed to log fatal error: {log_error}")
+            print(f"[CRITICAL] Original fatal error: {e}")
+        finally:
+            exit(1) 
