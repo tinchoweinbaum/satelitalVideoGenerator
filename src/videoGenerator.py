@@ -143,9 +143,9 @@ class VideoGenerator:
                     raise
 
             Log.videoRenderingStarted()
-            with suppress_stdout():
+            # with suppress_stdout():
                 # renderiza el video
-                final_clip.write_videofile(output_file, audio=False, codec=self.codec, 
+            final_clip.write_videofile(output_file, audio=False, codec=self.codec, 
                                         bitrate=self.bitrate, threads=self.threads)
                 
             # --- Corro ffmpeg para llevar el video a 30fps para que el puto de vMix lo corra bien ---
