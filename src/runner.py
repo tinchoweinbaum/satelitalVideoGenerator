@@ -32,6 +32,8 @@ class Runner:
 
         print("Running")
 
+        job()
+
         for i in range(7, 58, 10):
             @self.sched.scheduled_job('cron', minute=str(i))
             def job():
