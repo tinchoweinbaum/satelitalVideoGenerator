@@ -117,6 +117,7 @@ class VideoGenerator:
 
     def generateFinalVideo(self, sequence: ImageSequenceClip, total_frames: int):
         try:
+            success = False
             sequence.duration = total_frames # iguala la duración de la secuencia de imágenes con la cantidad de frames
 
             # crea el fondo como una secuencia de imágenes con la misma cantidad de frames que la secuencia de imágenes
@@ -127,7 +128,8 @@ class VideoGenerator:
             final_clip = CompositeVideoClip([background_clip, sequence], size=(self.width, self.height))
 
             output_file = os.path.join(self.path, self.fileName + self.extension)
-            print(f"[INFO] Rendering video to: {output_file}")
+            temp_output = os.path.join(self.path, "TEMP_" + self.fileName + self.extension)
+            print(f"[INFO] Rendering video to: {temp_output}")
             
             # Check if file exists and is writable
             if os.path.exists(output_file):
@@ -145,29 +147,36 @@ class VideoGenerator:
             Log.videoRenderingStarted()
             # with suppress_stdout():
                 # renderiza el video
-            final_clip.write_videofile(output_file, audio=False, codec=self.codec, 
+            final_clip.write_videofile(temp_output, audio=False, codec=self.codec, 
                                         bitrate=self.bitrate, threads=self.threads)
+            success = True
                 
             # --- Corro ffmpeg para llevar el video a 30fps para que el puto de vMix lo corra bien ---
 
-            video_vmix = os.path.join(self.path, self.fileName)
+            if success:
             
-            print(f"[INFO] Iniciando adaptación local a 30fps para vMix...")
+                print(f"[INFO] Iniciando adaptación local a 30fps para vMix...")
+                
+                # Comando de FFmpeg para inflar a 30fps
+                comando_ffmpeg = [
+                    'ffmpeg', '-y', 
+                    '-i', temp_output,          # El archivo de 4.2 fps recién creado
+                    '-vf', 'fps=30',             # Forzamos los 30 cuadros por segundo
+                    '-c:v', 'libx264',           # Codec H.264
+                    '-pix_fmt', 'yuv420p',       # Formato de color compatible
+                    '-preset', 'ultrafast',      # Máxima velocidad en el server
+                    output_file
+                ]
+                
+                subprocess.run(comando_ffmpeg, check=True)
             
-            # Comando de FFmpeg para inflar a 30fps
-            comando_ffmpeg = [
-                'ffmpeg', '-y', 
-                '-i', output_file,          # El archivo de 4.2 fps recién creado
-                '-vf', 'fps=30',             # Forzamos los 30 cuadros por segundo
-                '-c:v', 'libx264',           # Codec H.264
-                '-pix_fmt', 'yuv420p',       # Formato de color compatible
-                '-preset', 'ultrafast',      # Máxima velocidad en el server
-                output_file
-            ]
+            else:
+                print("[ERROR]: Error en la creación del video.")
+
+            if os.path.exists(temp_output):
+                    os.remove(temp_output)
             
-            subprocess.run(comando_ffmpeg, check=True)
-            
-            print(f"[SUCCESS] Video para vMix generado en: {video_vmix}")
+
 
             print(f"[INFO] Video rendered successfully: {output_file}")
             print(f"[INFO] File size: {os.path.getsize(output_file) / (1024*1024):.2f} MB")
