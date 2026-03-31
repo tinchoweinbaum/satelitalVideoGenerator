@@ -32,6 +32,16 @@ class Runner:
 
         print("Running")
 
+        def job():
+            image_lists = []
+            for imager in imagers:
+                imager.updateBuffer()
+                image_lists.append(imager.getImageList())
+            try:
+                generator.imagesToVideo(image_lists, 2)
+            except Exception as e:
+                Log.videoRenderingError(e)
+
         job()
 
         for i in range(7, 58, 10):
