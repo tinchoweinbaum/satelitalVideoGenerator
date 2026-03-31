@@ -37,10 +37,10 @@ def restartImages():
     satelites = ["CEN", "ARG"]
 
     # descarga las primeras 24 imágenes de todos los satélites
-    # print("Descargando primeras imágenes")
-    #for satelite in satelites:
-    #    w = ImageManager(satelite=satelite)
-    #    w.updateBuffer()
+    print("Descargando primeras imágenes")
+    for satelite in satelites:
+        w = ImageManager(satelite=satelite)
+        w.updateBuffer()
 
 
 def main():
