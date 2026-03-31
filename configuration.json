@@ -6,7 +6,8 @@
     "height": 900,
     "mapResizeRatio": 0.85,
     "threads": 1,
-    "path": "C:\\Users\\santi\\Desktop\\",
+    "path": "D:\\Videos\\",
     "fileName": "mapas",
-    "extension": ".mp4"
+    "extension": ".mp4",
+    "developerMode": false
 }

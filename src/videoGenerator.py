@@ -2,6 +2,8 @@ import contextlib
 import json
 import os
 import sys
+import subprocess
+
 from PIL import Image
 
 from moviepy.editor import ImageSequenceClip, CompositeVideoClip, concatenate
@@ -41,6 +43,9 @@ class VideoGenerator:
         self.path = config['path']
         self.fileName = config['fileName']
         self.extension = config['extension']
+        
+        # Validate output directory
+        self._validate_output_path()
     
         self.imagesLen = 24
         self.imageCount = 24
@@ -74,6 +79,38 @@ class VideoGenerator:
         # sequence = self.addProgressBar(sequence) TODO
         return sequence
 
+    def _validate_output_path(self):
+        """Validate that output directory exists and is writable"""
+        try:
+            # Check if directory exists
+            if not os.path.exists(self.path):
+                print(f"[WARNING] Output directory does not exist: {self.path}")
+                print(f"[INFO] Creating directory: {self.path}")
+                os.makedirs(self.path, exist_ok=True)
+                Log.write(f"Created output directory: {self.path}", 0)
+            
+            # Check if directory is writable
+            test_file = os.path.join(self.path, ".write_test_temp")
+            try:
+                with open(test_file, 'w') as f:
+                    f.write("test")
+                os.remove(test_file)
+                print(f"[INFO] Output directory is writable: {self.path}")
+            except PermissionError as pe:
+                error_msg = f"No write permission in output directory: {self.path}"
+                print(f"[ERROR] {error_msg}")
+                Log.write(error_msg, 2)
+                raise PermissionError(error_msg) from pe
+            except Exception as e:
+                error_msg = f"Cannot write to output directory {self.path}: {e}"
+                print(f"[ERROR] {error_msg}")
+                Log.write(error_msg, 2)
+                raise
+        except Exception as e:
+            print(f"[ERROR] Error validating output path: {e}")
+            Log.write(f"Error validating output path: {e}", 2)
+            raise
+    
     def joinSequences(self, video_list:List[ImageSequenceClip]) -> ImageSequenceClip:
         # sacando el método compose se modifica el tamaño de la segunda secuencia para igualarse
         return concatenate(video_list, method="compose") 
@@ -89,15 +126,66 @@ class VideoGenerator:
             # une el fondo con la secuencia de imágenes
             final_clip = CompositeVideoClip([background_clip, sequence], size=(self.width, self.height))
 
+            output_file = os.path.join(self.path, self.fileName + self.extension)
+            print(f"[INFO] Rendering video to: {output_file}")
+            
+            # Check if file exists and is writable
+            if os.path.exists(output_file):
+                try:
+                    # Try to open in append mode to check write permission
+                    with open(output_file, 'a'):
+                        pass
+                    print(f"[INFO] Existing file is writable, will be overwritten")
+                except PermissionError:
+                    error_msg = f"Cannot overwrite existing file (permission denied): {output_file}"
+                    print(f"[ERROR] {error_msg}")
+                    Log.write(error_msg, 2)
+                    raise
+
             Log.videoRenderingStarted()
             with suppress_stdout():
                 # renderiza el video
-                final_clip.write_videofile(self.path + self.fileName + self.extension, audio=False, codec=self.codec, 
+                final_clip.write_videofile(output_file, audio=False, codec=self.codec, 
                                         bitrate=self.bitrate, threads=self.threads)
+                
+            # --- Corro ffmpeg para llevar el video a 30fps para que el puto de vMix lo corra bien ---
 
+            video_vmix = os.path.join(self.path, self.fileName)
+            
+            print(f"[INFO] Iniciando adaptación local a 30fps para vMix...")
+            
+            # Comando de FFmpeg para inflar a 30fps
+            comando_ffmpeg = [
+                'ffmpeg', '-y', 
+                '-i', output_file,          # El archivo de 4.2 fps recién creado
+                '-vf', 'fps=30',             # Forzamos los 30 cuadros por segundo
+                '-c:v', 'libx264',           # Codec H.264
+                '-pix_fmt', 'yuv420p',       # Formato de color compatible
+                '-preset', 'ultrafast',      # Máxima velocidad en el server
+                output_file
+            ]
+            
+            subprocess.run(comando_ffmpeg, check=True)
+            
+            print(f"[SUCCESS] Video para vMix generado en: {video_vmix}")
+
+            print(f"[INFO] Video rendered successfully: {output_file}")
+            print(f"[INFO] File size: {os.path.getsize(output_file) / (1024*1024):.2f} MB")
             Log.videoUpdated()
+        except PermissionError as pe:
+            error_msg = f"Permission denied writing video file: {pe}"
+            print(f"[ERROR] {error_msg}")
+            Log.write(error_msg, 2)
+            raise
+        except OSError as oe:
+            error_msg = f"OS error writing video file: {oe}"
+            print(f"[ERROR] {error_msg}")
+            Log.write(error_msg, 2)
+            raise
         except Exception as e:
-            print(f"[ERROR] Failed to generate final video: {e}")
+            error_msg = f"Failed to generate final video: {e}"
+            print(f"[ERROR] {error_msg}")
+            Log.write(error_msg, 2)
             raise
 
     # globaliza todas las funciones

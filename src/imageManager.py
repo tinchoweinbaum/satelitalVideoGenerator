@@ -1,4 +1,5 @@
 import os
+import json
 from typing import List
 from log import Log
 from imageDownloader import ImageDownloader
@@ -7,10 +8,27 @@ from imageDownloader import ImageDownloader
 class ImageManager:
 
     satelite = ""
+    # Shared downloader instance across all ImageManagers to avoid multiple token refreshes
+    _shared_downloader = None
 
     def __init__(self, satelite: str):
         self.satelite = satelite
-        self.downloader = ImageDownloader()
+        # Use shared downloader instance
+        if ImageManager._shared_downloader is None:
+            print("[INFO] Creating shared ImageDownloader instance")
+            # Load configuration to get developer mode
+            developer_mode = False
+            try:
+                with open('configuration.json', 'r') as f:
+                    config = json.load(f)
+                    developer_mode = config.get('developerMode', False)
+                    print(f"[INFO] Configuration loaded: developerMode = {developer_mode}")
+            except Exception as config_err:
+                print(f"[WARNING] Could not read configuration.json: {config_err}")
+                print("[INFO] Using default: developerMode = False")
+            
+            ImageManager._shared_downloader = ImageDownloader(developer_mode=developer_mode)
+        self.downloader = ImageManager._shared_downloader
         self.groupId = ""
         if satelite == "ARG":
             self.groupId = "TOP_C13_ARG_ALTA"
@@ -85,12 +103,25 @@ class ImageManager:
         
         # Download missing images
         # We focus on the latest ones. The API returns the last 24.
-        for image_name in available_images:
+        import time
+        import random
+        
+        # Initial delay to avoid immediate rate limiting
+        time.sleep(2)
+        
+        for i, image_name in enumerate(available_images):
             if image_name not in current_files:
                 Log.write(f"Downloading new image: {image_name}", 0)
                 content = self.downloader.download_image(image_name)
                 if content:
                     self.saveImage(image_name, content)
+                # Progressive delay between downloads with randomness to avoid Cloudflare rate limiting
+                # Longer delays for IPs that might be flagged
+                base_delay = 2.5 + (i * 0.1)  # Increases with each download
+                random_delay = random.uniform(0.5, 1.5)
+                total_delay = base_delay + random_delay
+                print(f"[DEBUG] Waiting {total_delay:.1f}s before next download...")
+                time.sleep(total_delay)
         
         self.cleanBuffer()
 
