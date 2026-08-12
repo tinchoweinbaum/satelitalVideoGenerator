@@ -1,13 +1,76 @@
 {
-    "fps": 4.2,
-    "bitrate": "5000k",
-    "codec": "mpeg4",
-    "width": 1600,
-    "height": 900,
-    "mapResizeRatio": 0.85,
-    "threads": 1,
-    "path": "D:\\Videos\\",
-    "fileName": "mapas",
-    "extension": ".mp4",
-    "developerMode": false
+    "video": {
+        "width": 1920,
+        "height": 1080,
+        "fps": 30,
+        "durationSeconds": 30,
+        "codec": "libx264",
+        "bitrate": "8000k",
+        "preset": "veryfast",
+        "pixelFormat": "yuv420p",
+        "extension": ".mp4",
+        "threads": 0,
+        "background": "src/resources/background.jpg"
+    },
+    "map": {
+        "width": 900,
+        "height": 700,
+        "scale": 1.0,
+        "fitMode": "contain"
+    },
+    "output": {
+        "path": "D:\\Videos\\",
+        "fileName": "mapas"
+    },
+    "sequence": {
+        "bufferSize": 24,
+        "sequenceRepeats": 1,
+        "lastImageRepeats": 5
+    },
+    "satellites": [
+        {
+            "name": "ARG",
+            "groupId": "TOP_C13_ARG_ALTA"
+        },
+        {
+            "name": "CEN",
+            "groupId": "TOP_C13_CEN_ALTA"
+        }
+    ],
+    "smn": {
+        "apiBaseUrl": "https://api-test.smn.gob.ar/v1",
+        "staticBaseUrl": "https://estaticos.smn.gob.ar/vmsr/satelite",
+        "username": "canal79mdq",
+        "password": "K6dmG52y",
+        "tokenServerUrl": "https://admin.canal79tv.com.ar/server/getsmntoken.php"
+    },
+    "download": {
+        "bufferDir": "buffer",
+        "requestTimeoutSeconds": 30,
+        "maxRetries": 3,
+        "delayBetweenDownloadsSeconds": 1.0,
+        "useBrowserFallback": true,
+        "developerMode": false
+    },
+    "schedule": {
+        "runOnStart": true,
+        "cronMinutes": [
+            7,
+            17,
+            27,
+            37,
+            47,
+            57
+        ]
+    },
+    "logging": {
+        "file": "log.txt",
+        "level": "INFO",
+        "emailOnError": false,
+        "emailsFile": "emails.json",
+        "smtpHost": "smtp.gmail.com",
+        "smtpPort": 587,
+        "smtpUser": "",
+        "smtpPassword": ""
+    }
 }
