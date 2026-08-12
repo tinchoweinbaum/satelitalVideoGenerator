@@ -1,18 +1,22 @@
 {
     "video": {
-        "width": 1600,
-        "height": 900,
+        "width": 1920,
+        "height": 1080,
         "fps": 30,
         "durationSeconds": 30,
         "codec": "libx264",
-        "bitrate": "5000k",
+        "bitrate": "8000k",
         "preset": "veryfast",
         "pixelFormat": "yuv420p",
         "extension": ".mp4",
         "threads": 0,
-        "background": "src/resources/background.jpg",
-        "mapResizeRatio": 0.85,
-        "mapFitMode": "contain"
+        "background": "src/resources/background.jpg"
+    },
+    "map": {
+        "width": 900,
+        "height": 700,
+        "scale": 1.0,
+        "fitMode": "contain"
     },
     "output": {
         "path": "D:\\Videos\\",

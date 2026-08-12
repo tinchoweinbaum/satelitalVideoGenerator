@@ -32,12 +32,39 @@ class VideoConfig:
     extension: str
     threads: int
     background: Path
-    map_resize_ratio: float
-    map_fit_mode: str
 
     @property
     def total_frames(self) -> int:
         return self.fps * self.duration_seconds
+
+
+@dataclass(frozen=True)
+class MapConfig:
+    """Tamaño del mapa que se compone sobre el fondo.
+
+    ``width`` y ``height`` definen la caja en la que entra el mapa y ``scale`` la
+    agranda o achica sin tocar la caja. El mapa siempre queda centrado en el cuadro.
+    """
+
+    width: int
+    height: int
+    scale: float
+    fit_mode: str
+
+    def target_size(self, source_size: tuple[int, int]) -> tuple[int, int]:
+        """Tamaño final del mapa para una imagen de origen dada."""
+        source_width, source_height = source_size
+
+        if self.fit_mode == "stretch":
+            width = self.width * self.scale
+            height = self.height * self.scale
+        else:
+            # 'contain': entra completo en la caja sin deformarse.
+            ratio = min(self.width / source_width, self.height / source_height) * self.scale
+            width = source_width * ratio
+            height = source_height * ratio
+
+        return max(1, round(width)), max(1, round(height))
 
 
 @dataclass(frozen=True)
@@ -109,6 +136,7 @@ class LoggingConfig:
 @dataclass(frozen=True)
 class Config:
     video: VideoConfig
+    map: MapConfig
     output: OutputConfig
     sequence: SequenceConfig
     satellites: List[Satellite]
@@ -155,8 +183,8 @@ def load_config(path: Path | None = None) -> Config:
 
     video_raw = _section(data, "video")
     video = VideoConfig(
-        width=int(_require(video_raw, "width", "video")),
-        height=int(_require(video_raw, "height", "video")),
+        width=int(video_raw.get("width", 1920)),
+        height=int(video_raw.get("height", 1080)),
         fps=int(video_raw.get("fps", 30)),
         duration_seconds=int(video_raw.get("durationSeconds", 30)),
         codec=str(video_raw.get("codec", "libx264")),
@@ -166,8 +194,16 @@ def load_config(path: Path | None = None) -> Config:
         extension=str(video_raw.get("extension", ".mp4")),
         threads=int(video_raw.get("threads", 0)),
         background=_resolve(root, str(video_raw.get("background", "src/resources/background.jpg"))),
-        map_resize_ratio=float(video_raw.get("mapResizeRatio", 0.85)),
-        map_fit_mode=str(video_raw.get("mapFitMode", "contain")).lower(),
+    )
+
+    map_raw = data.get("map")
+    if not isinstance(map_raw, dict):
+        raise ConfigError(f"Falta la sección 'map' en {CONFIG_FILENAME}")
+    map_config = MapConfig(
+        width=int(map_raw.get("width", 900)),
+        height=int(map_raw.get("height", 700)),
+        scale=float(map_raw.get("scale", 1.0)),
+        fit_mode=str(map_raw.get("fitMode", "contain")).lower(),
     )
 
     output_raw = _section(data, "output")
@@ -235,6 +271,7 @@ def load_config(path: Path | None = None) -> Config:
 
     config = Config(
         video=video,
+        map=map_config,
         output=output,
         sequence=sequence,
         satellites=satellites,
@@ -258,12 +295,25 @@ def _validate(config: Config) -> None:
         raise ConfigError("video.fps debe ser mayor a cero")
     if video.duration_seconds <= 0:
         raise ConfigError("video.durationSeconds debe ser mayor a cero")
-    if not 0 < video.map_resize_ratio <= 1:
-        raise ConfigError("video.mapResizeRatio debe estar entre 0 (exclusivo) y 1 (inclusive)")
-    if video.map_fit_mode not in {"contain", "ratio"}:
-        raise ConfigError("video.mapFitMode debe ser 'contain' o 'ratio'")
     if not video.extension.startswith("."):
         raise ConfigError("video.extension debe empezar con un punto, por ejemplo '.mp4'")
+
+    map_config = config.map
+    if map_config.width <= 0 or map_config.height <= 0:
+        raise ConfigError("map.width y map.height deben ser mayores a cero")
+    if map_config.scale <= 0:
+        raise ConfigError("map.scale debe ser mayor a cero")
+    if map_config.fit_mode not in {"contain", "stretch"}:
+        raise ConfigError("map.fitMode debe ser 'contain' o 'stretch'")
+
+    scaled_width = map_config.width * map_config.scale
+    scaled_height = map_config.height * map_config.scale
+    if scaled_width > video.width or scaled_height > video.height:
+        raise ConfigError(
+            f"El mapa ({scaled_width:.0f}x{scaled_height:.0f} después de aplicar map.scale) "
+            f"no entra en el video de {video.width}x{video.height}. "
+            "Bajá map.width, map.height o map.scale."
+        )
 
     sequence = config.sequence
     if sequence.buffer_size <= 0:

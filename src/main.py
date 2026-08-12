@@ -79,6 +79,13 @@ def check_environment(config: Config) -> int:
         config.video.total_frames,
     )
     log.info(
+        "Mapa: caja de %sx%s, escala %s, modo '%s', centrado en el cuadro",
+        config.map.width,
+        config.map.height,
+        config.map.scale,
+        config.map.fit_mode,
+    )
+    log.info(
         "Secuencia: %s satélites x %s pasada(s) x (%s imágenes + %s repeticiones) = %s slots",
         len(config.satellites),
         config.sequence.sequence_repeats,

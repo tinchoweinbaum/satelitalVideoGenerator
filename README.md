@@ -1,8 +1,8 @@
 # Generador de videos de mapas satelitales - Canal 79
 
 Descarga las imágenes satelitales del Servicio Meteorológico Nacional (SMN) y arma
-un video de **30 segundos exactos a 30 fps** con los dos satélites (ARG y CEN) en
-un único archivo, listo para reproducir en vMix.
+un video **Full HD de 1920x1080, de 30 segundos exactos a 30 fps** con los dos
+satélites (ARG y CEN) en un único archivo, listo para reproducir en vMix.
 
 ## Cómo funciona
 
@@ -86,8 +86,27 @@ acumulan errores de redondeo. FFmpeg recibe esos 900 cuadros y los codifica a
 | `extension` | Extensión del archivo final |
 | `threads` | Núcleos para FFmpeg (`0` = automático) |
 | `background` | Imagen de fondo del video |
-| `mapResizeRatio` | Qué porcentaje del cuadro ocupa el mapa |
-| `mapFitMode` | `contain`: ajusta el mapa al cuadro y después aplica el ratio. `ratio`: escala el mapa por el ratio sobre su tamaño original |
+
+La salida es siempre **1920x1080**. El fondo se adapta solo a esa resolución.
+
+### map
+
+Controla el tamaño del mapa que se compone sobre el fondo. **El mapa siempre queda
+exactamente centrado en el cuadro**, cualquiera sea el tamaño elegido.
+
+| Clave | Descripción |
+|-------|-------------|
+| `width`, `height` | Resolución del mapa, en píxeles |
+| `scale` | Multiplicador sobre esa resolución: `1.0` la deja igual, `1.2` la agranda un 20%, `0.8` la achica un 20% |
+| `fitMode` | `contain`: el mapa entra completo en la caja `width` x `height` sin deformarse (puede sobrar espacio en un lado). `stretch`: el mapa toma exactamente `width` x `height`, aunque se deforme |
+
+Los valores por defecto (`900 x 700`, escala `1.0`) están elegidos para que el mapa
+se vea completo y grande sin tapar ningún elemento del fondo: quedan a la vista el
+título, la escala de temperaturas, el logo de Canal 79 y el crédito del Servicio
+Meteorológico Nacional.
+
+Para agrandar el mapa alcanza con subir `scale` (por ejemplo a `1.1`); si el mapa
+no entra en el cuadro, el programa avisa al arrancar en lugar de recortarlo.
 
 ### output
 

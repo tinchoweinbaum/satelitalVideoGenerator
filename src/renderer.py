@@ -101,16 +101,27 @@ class VideoRenderer:
             )
 
             encoded: Dict[Path, bytes] = {}
+            map_sizes: set[tuple[int, int]] = set()
             for image_path in plan.unique_images():
-                encoded[image_path] = self._compose_single(image_path, canvas_base)
+                encoded[image_path], size = self._compose_single(image_path, canvas_base)
+                map_sizes.add(size)
+
+        get_logger().info(
+            "Mapa centrado en %sx%s con tamaño: %s",
+            video.width,
+            video.height,
+            ", ".join(f"{width}x{height}" for width, height in sorted(map_sizes)),
+        )
         return encoded
 
-    def _compose_single(self, image_path: Path, canvas_base: Image.Image) -> bytes:
+    def _compose_single(
+        self, image_path: Path, canvas_base: Image.Image
+    ) -> tuple[bytes, tuple[int, int]]:
         video = self._config.video
         try:
             with Image.open(image_path) as source:
                 map_image = source.convert("RGB")
-                target_size = self._map_size(map_image.size)
+                target_size = self._config.map.target_size(map_image.size)
                 map_image = map_image.resize(target_size, Image.LANCZOS)
         except OSError as exc:
             raise RenderError(f"No se pudo abrir la imagen {image_path}: {exc}") from exc
@@ -126,19 +137,7 @@ class VideoRenderer:
         # compress_level bajo: el PNG solo viaja por una tubería local, así que
         # importa la velocidad y no el tamaño.
         frame.save(buffer, format="PNG", compress_level=1)
-        return buffer.getvalue()
-
-    def _map_size(self, source_size: tuple[int, int]) -> tuple[int, int]:
-        video = self._config.video
-        width, height = source_size
-
-        if video.map_fit_mode == "contain":
-            # Escala el mapa para que entre en el cuadro y después aplica el ratio.
-            scale = min(video.width / width, video.height / height) * video.map_resize_ratio
-        else:
-            scale = video.map_resize_ratio
-
-        return max(1, round(width * scale)), max(1, round(height * scale))
+        return buffer.getvalue(), (map_image.width, map_image.height)
 
     def _ffmpeg_command(self, output_path: Path, total_frames: int) -> List[str]:
         video = self._config.video
