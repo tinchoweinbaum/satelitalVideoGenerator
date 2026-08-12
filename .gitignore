@@ -1,4 +1,7 @@
-buffer
-video.mp4
+.venv/
+__pycache__/
+*.pyc
+buffer/
 log.txt
-src/__pycache__
+log.txt.*
+*.mp4
