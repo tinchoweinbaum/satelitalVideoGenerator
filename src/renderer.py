@@ -20,6 +20,15 @@ from PIL import Image
 from config import Config
 from frame_plan import FramePlan
 from logger import get_logger
+from output_publisher import OutputPublishError, publish_video
+
+
+def _encode_png(frame: Image.Image) -> bytes:
+    buffer = io.BytesIO()
+    # compress_level bajo: el PNG solo viaja por una tubería local, así que
+    # importa la velocidad y no el tamaño.
+    frame.save(buffer, format="PNG", compress_level=1)
+    return buffer.getvalue()
 
 
 class RenderError(Exception):
@@ -32,7 +41,12 @@ class VideoRenderer:
         self._ffmpeg = shutil.which("ffmpeg")
         if not self._ffmpeg:
             raise RenderError("No se encontró 'ffmpeg' en el PATH del sistema")
-        if not config.video.background.is_file():
+        if config.video.mapas_fondo:
+            if not config.video.foreground.is_file():
+                raise RenderError(
+                    f"No se encontró la imagen de primer plano: {config.video.foreground}"
+                )
+        elif not config.video.background.is_file():
             raise RenderError(f"No se encontró la imagen de fondo: {config.video.background}")
 
     def render(self, plan: FramePlan) -> Path:
@@ -87,23 +101,48 @@ class VideoRenderer:
             stderr_text = b"".join(stderr_chunks).decode("utf-8", errors="replace")
             raise RenderError(f"FFmpeg terminó con código {return_code}: {stderr_text[-1500:]}")
 
-        # Reemplazo atómico: vMix nunca ve un archivo a medio escribir.
-        temp_path.replace(output_path)
-        size_mb = output_path.stat().st_size / (1024 * 1024)
-        log.info("Video generado: %s (%.2f MB)", output_path, size_mb)
-        return output_path
+        output_cfg = self._config.output
+        try:
+            published_path = publish_video(
+                temp_path,
+                output_path,
+                retries=output_cfg.replace_retries,
+                retry_delay_seconds=output_cfg.replace_retry_delay_seconds,
+                fallback_path=output_cfg.fallback_file_path(video.extension),
+            )
+        except OutputPublishError as exc:
+            raise RenderError(str(exc)) from exc
+
+        size_mb = published_path.stat().st_size / (1024 * 1024)
+        log.info("Video generado: %s (%.2f MB)", published_path, size_mb)
+        return published_path
 
     def _compose_frames(self, plan: FramePlan) -> Dict[Path, bytes]:
         video = self._config.video
+        encoded: Dict[Path, bytes] = {}
+        map_sizes: set[tuple[int, int]] = set()
+
+        if video.mapas_fondo:
+            with Image.open(video.foreground) as overlay:
+                foreground = overlay.convert("RGBA").resize(
+                    (video.width, video.height), Image.LANCZOS
+                )
+            for image_path in plan.unique_images():
+                encoded[image_path], size = self._compose_fullscreen(image_path, foreground)
+                map_sizes.add(size)
+            get_logger().info(
+                "Modo mapas_fondo: mapa a pantalla completa %sx%s con foreground",
+                video.width,
+                video.height,
+            )
+            return encoded
+
         with Image.open(video.background) as background:
             canvas_base = background.convert("RGB").resize(
                 (video.width, video.height), Image.LANCZOS
             )
-
-            encoded: Dict[Path, bytes] = {}
-            map_sizes: set[tuple[int, int]] = set()
             for image_path in plan.unique_images():
-                encoded[image_path], size = self._compose_single(image_path, canvas_base)
+                encoded[image_path], size = self._compose_centered(image_path, canvas_base)
                 map_sizes.add(size)
 
         get_logger().info(
@@ -114,7 +153,7 @@ class VideoRenderer:
         )
         return encoded
 
-    def _compose_single(
+    def _compose_centered(
         self, image_path: Path, canvas_base: Image.Image
     ) -> tuple[bytes, tuple[int, int]]:
         video = self._config.video
@@ -132,12 +171,25 @@ class VideoRenderer:
             (video.height - map_image.height) // 2,
         )
         frame.paste(map_image, position)
+        return _encode_png(frame), (map_image.width, map_image.height)
 
-        buffer = io.BytesIO()
-        # compress_level bajo: el PNG solo viaja por una tubería local, así que
-        # importa la velocidad y no el tamaño.
-        frame.save(buffer, format="PNG", compress_level=1)
-        return buffer.getvalue(), (map_image.width, map_image.height)
+    def _compose_fullscreen(
+        self, image_path: Path, foreground: Image.Image
+    ) -> tuple[bytes, tuple[int, int]]:
+        video = self._config.video
+        canvas_size = (video.width, video.height)
+        try:
+            with Image.open(image_path) as source:
+                map_image = source.convert("RGB").resize(canvas_size, Image.LANCZOS)
+        except OSError as exc:
+            raise RenderError(f"No se pudo abrir la imagen {image_path}: {exc}") from exc
+
+        frame = map_image.convert("RGBA")
+        if "A" in foreground.getbands():
+            frame = Image.alpha_composite(frame, foreground)
+        else:
+            frame.paste(foreground.convert("RGBA"), (0, 0))
+        return _encode_png(frame.convert("RGB")), canvas_size
 
     def _ffmpeg_command(self, output_path: Path, total_frames: int) -> List[str]:
         video = self._config.video
