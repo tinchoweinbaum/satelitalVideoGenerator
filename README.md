@@ -22,8 +22,9 @@ API del SMN (lista de archivos)  ->  descarga de imágenes  ->  buffer en disco
    Primero por HTTP directo; si Cloudflare bloquea, se reintenta con un navegador
    real (Playwright). Siempre se guardan los bytes originales del JPG.
 4. **Buffer**: se mantienen las últimas 24 imágenes de cada satélite.
-5. **Video**: cada imagen se compone centrada sobre `src/resources/background.jpg`
-   y FFmpeg codifica todo en una sola pasada.
+5. **Video**: hay dos modos de composición, según `video.mapas_fondo`:
+   - `false` (por defecto): cada mapa se centra sobre `src/resources/background.jpg`.
+   - `true`: el mapa ocupa toda la pantalla y encima se aplica `src/resources/foreground.png`.
 
 ## Instalación
 
@@ -85,14 +86,18 @@ acumulan errores de redondeo. FFmpeg recibe esos 900 cuadros y los codifica a
 | `pixelFormat` | Formato de color (`yuv420p` para máxima compatibilidad) |
 | `extension` | Extensión del archivo final |
 | `threads` | Núcleos para FFmpeg (`0` = automático) |
-| `background` | Imagen de fondo del video |
+| `mapas_fondo` | `false`: mapa centrado sobre el fondo. `true`: mapa a pantalla completa con un primer plano encima |
+| `background` | Imagen de fondo (se usa cuando `mapas_fondo` es `false`) |
+| `foreground` | Imagen de primer plano (se usa cuando `mapas_fondo` es `true`). Si no se indica, se busca `foreground.png` en la misma carpeta que el fondo |
 
-La salida es siempre **1920x1080**. El fondo se adapta solo a esa resolución.
+La salida es siempre **1920x1080**. El fondo o el primer plano se adaptan solos a esa resolución.
+
+Cuando `mapas_fondo` es `true`, el mapa se estira a 1920x1080 y **se ignoran** `map.width`, `map.height`, `map.scale` y `map.fitMode`. El primer plano debería ser un PNG con transparencia: las zonas opacas (títulos, leyenda, logos) quedan fijas y el mapa se ve a través de las zonas transparentes.
 
 ### map
 
-Controla el tamaño del mapa que se compone sobre el fondo. **El mapa siempre queda
-exactamente centrado en el cuadro**, cualquiera sea el tamaño elegido.
+Controla el tamaño del mapa **solo cuando `mapas_fondo` es `false`**. En ese modo el mapa queda
+exactamente centrado en el cuadro, cualquiera sea el tamaño elegido.
 
 | Clave | Descripción |
 |-------|-------------|
@@ -114,6 +119,9 @@ no entra en el cuadro, el programa avisa al arrancar en lugar de recortarlo.
 |-------|-------------|
 | `path` | Carpeta donde se guarda el video |
 | `fileName` | Nombre del archivo, sin extensión |
+| `replaceRetries` | Cuántas veces reintentar reemplazar el archivo si está bloqueado (por defecto 8) |
+| `replaceRetryDelaySeconds` | Segundos de espera entre reintentos (por defecto 2) |
+| `fallbackFileName` | Si `mapas.mp4` sigue bloqueado (vMix, vista previa de Windows), el video se guarda con este nombre alternativo en la misma carpeta |
 
 ### sequence
 
@@ -172,7 +180,18 @@ Lista ordenada de satélites; el orden es el que se ve en el video.
 Cloudflare está bloqueando la conexión. Verificá que Playwright esté instalado
 (`install.bat`) y que `useBrowserFallback` esté en `true`.
 
-**FFmpeg no se encuentra.** Instalalo y agregalo al PATH; `run.bat --check` lo avisa.
+**WinError 5 / Acceso denegado al guardar `mapas.mp4`.**
+Otro programa tiene el archivo abierto, casi siempre **vMix** o la vista previa del
+Explorador de Windows en `D:\Videos\`. El programa reintenta varias veces y, en
+Windows, usa la API `ReplaceFile` para reemplazar el archivo aunque esté en uso.
+Si aun así falla, guarda el video como `mapas_nuevo.mp4` (configurable con
+`output.fallbackFileName`). Podés apuntar vMix a ese archivo o cerrar vMix un
+momento para que el próximo ciclo vuelva a escribir `mapas.mp4`.
 
-**El mapa se ve muy chico o muy grande.** Ajustá `mapResizeRatio`. Si el tamaño de
-las imágenes del SMN cambia, `mapFitMode: "contain"` se adapta solo.
+**El mapa se ve muy chico o muy grande.** En modo clásico (`mapas_fondo: false`)
+ajustá `map.width`, `map.height` o `map.scale`. Si `mapas_fondo` es `true`, el mapa
+siempre llena la pantalla y esos valores no se usan.
+
+**Falta la imagen de primer plano.** Con `mapas_fondo: true` hace falta
+`src/resources/foreground.png` (o la ruta de `video.foreground`). Colocalo en la
+misma carpeta que `background.jpg`.

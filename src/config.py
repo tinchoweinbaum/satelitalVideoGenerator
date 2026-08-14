@@ -32,6 +32,8 @@ class VideoConfig:
     extension: str
     threads: int
     background: Path
+    foreground: Path
+    mapas_fondo: bool
 
     @property
     def total_frames(self) -> int:
@@ -71,12 +73,20 @@ class MapConfig:
 class OutputConfig:
     path: Path
     file_name: str
+    replace_retries: int = 8
+    replace_retry_delay_seconds: float = 2.0
+    fallback_file_name: str | None = None
 
     def file_path(self, extension: str) -> Path:
         return self.path / f"{self.file_name}{extension}"
 
     def temp_file_path(self, extension: str) -> Path:
-        return self.path / f".{self.file_name}.tmp{extension}"
+        return self.path / f"TEMP_{self.file_name}{extension}"
+
+    def fallback_file_path(self, extension: str) -> Path | None:
+        if not self.fallback_file_name:
+            return None
+        return self.path / f"{self.fallback_file_name}{extension}"
 
 
 @dataclass(frozen=True)
@@ -169,6 +179,18 @@ def _resolve(root: Path, raw: str) -> Path:
     return path if path.is_absolute() else root / path
 
 
+def _as_bool(value: Any, key: str) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"true", "1", "yes", "si", "sí"}:
+            return True
+        if lowered in {"false", "0", "no"}:
+            return False
+    raise ConfigError(f"'{key}' debe ser true o false")
+
+
 def load_config(path: Path | None = None) -> Config:
     root = project_root()
     config_path = path or (root / CONFIG_FILENAME)
@@ -182,6 +204,13 @@ def load_config(path: Path | None = None) -> Config:
         raise ConfigError(f"{CONFIG_FILENAME} tiene JSON inválido: {exc}") from exc
 
     video_raw = _section(data, "video")
+    background = _resolve(root, str(video_raw.get("background", "src/resources/background.jpg")))
+    foreground_raw = video_raw.get("foreground")
+    if foreground_raw:
+        foreground = _resolve(root, str(foreground_raw))
+    else:
+        foreground = background.parent / "foreground.png"
+
     video = VideoConfig(
         width=int(video_raw.get("width", 1920)),
         height=int(video_raw.get("height", 1080)),
@@ -193,7 +222,9 @@ def load_config(path: Path | None = None) -> Config:
         pixel_format=str(video_raw.get("pixelFormat", "yuv420p")),
         extension=str(video_raw.get("extension", ".mp4")),
         threads=int(video_raw.get("threads", 0)),
-        background=_resolve(root, str(video_raw.get("background", "src/resources/background.jpg"))),
+        background=background,
+        foreground=foreground,
+        mapas_fondo=_as_bool(video_raw.get("mapas_fondo", False), "video.mapas_fondo"),
     )
 
     map_raw = data.get("map")
@@ -207,9 +238,13 @@ def load_config(path: Path | None = None) -> Config:
     )
 
     output_raw = _section(data, "output")
+    fallback_name = output_raw.get("fallbackFileName")
     output = OutputConfig(
         path=Path(str(_require(output_raw, "path", "output"))),
         file_name=str(_require(output_raw, "fileName", "output")),
+        replace_retries=int(output_raw.get("replaceRetries", 8)),
+        replace_retry_delay_seconds=float(output_raw.get("replaceRetryDelaySeconds", 2.0)),
+        fallback_file_name=str(fallback_name) if fallback_name else None,
     )
 
     sequence_raw = _section(data, "sequence")
@@ -306,14 +341,15 @@ def _validate(config: Config) -> None:
     if map_config.fit_mode not in {"contain", "stretch"}:
         raise ConfigError("map.fitMode debe ser 'contain' o 'stretch'")
 
-    scaled_width = map_config.width * map_config.scale
-    scaled_height = map_config.height * map_config.scale
-    if scaled_width > video.width or scaled_height > video.height:
-        raise ConfigError(
-            f"El mapa ({scaled_width:.0f}x{scaled_height:.0f} después de aplicar map.scale) "
-            f"no entra en el video de {video.width}x{video.height}. "
-            "Bajá map.width, map.height o map.scale."
-        )
+    if not video.mapas_fondo:
+        scaled_width = map_config.width * map_config.scale
+        scaled_height = map_config.height * map_config.scale
+        if scaled_width > video.width or scaled_height > video.height:
+            raise ConfigError(
+                f"El mapa ({scaled_width:.0f}x{scaled_height:.0f} después de aplicar map.scale) "
+                f"no entra en el video de {video.width}x{video.height}. "
+                "Bajá map.width, map.height o map.scale."
+            )
 
     sequence = config.sequence
     if sequence.buffer_size <= 0:

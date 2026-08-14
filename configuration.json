@@ -10,7 +10,9 @@
         "pixelFormat": "yuv420p",
         "extension": ".mp4",
         "threads": 0,
-        "background": "src/resources/background.jpg"
+        "mapas_fondo": false,
+        "background": "src/resources/background.jpg",
+        "foreground": "src/resources/foreground.png"
     },
     "map": {
         "width": 900,
@@ -20,7 +22,10 @@
     },
     "output": {
         "path": "D:\\Videos\\",
-        "fileName": "mapas"
+        "fileName": "mapas",
+        "replaceRetries": 8,
+        "replaceRetryDelaySeconds": 2.0,
+        "fallbackFileName": "mapas_nuevo"
     },
     "sequence": {
         "bufferSize": 24,
