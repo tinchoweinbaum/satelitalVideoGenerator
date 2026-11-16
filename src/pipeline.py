@@ -116,4 +116,7 @@ class Pipeline:
     def run_once(self, download: bool = True) -> Path:
         if download:
             self.sync_images()
+        # Chrome de Playwright no tiene que convivir con x264: se cierra antes de
+        # renderizar y se vuelve a abrir en el próximo ciclo si hace falta.
+        self._downloader.close()
         return self.render_video()

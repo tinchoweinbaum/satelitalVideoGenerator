@@ -58,7 +58,10 @@ def check_environment(config: Config) -> int:
 
     if shutil.which("ffmpeg") is None:
         problems.append("No se encontró 'ffmpeg' en el PATH")
-    if not config.video.background.is_file():
+    if config.video.mapas_fondo:
+        if not config.video.foreground.is_file():
+            problems.append(f"Falta la imagen de primer plano: {config.video.foreground}")
+    elif not config.video.background.is_file():
         problems.append(f"Falta la imagen de fondo: {config.video.background}")
 
     try:
@@ -78,13 +81,23 @@ def check_environment(config: Config) -> int:
         config.video.duration_seconds,
         config.video.total_frames,
     )
-    log.info(
-        "Mapa: caja de %sx%s, escala %s, modo '%s', centrado en el cuadro",
-        config.map.width,
-        config.map.height,
-        config.map.scale,
-        config.map.fit_mode,
-    )
+    if config.video.mapas_fondo:
+        log.info(
+            "Modo mapas_fondo: mapa a pantalla completa con primer plano %s",
+            config.video.foreground,
+        )
+    else:
+        log.info(
+            "Modo clásico: mapa centrado sobre el fondo %s",
+            config.video.background,
+        )
+        log.info(
+            "Mapa: caja de %sx%s, escala %s, modo '%s', centrado en el cuadro",
+            config.map.width,
+            config.map.height,
+            config.map.scale,
+            config.map.fit_mode,
+        )
     log.info(
         "Secuencia: %s satélites x %s pasada(s) x (%s imágenes + %s repeticiones) = %s slots",
         len(config.satellites),
