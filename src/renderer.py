@@ -1,17 +1,14 @@
 """Composición de cuadros con Pillow y codificación con FFmpeg.
 
-Cada imagen única se compone una sola vez sobre el fondo y se cachea en memoria
-como PNG. Después los cuadros se envían a FFmpeg por stdin: entran exactamente
-``total_frames`` imágenes y sale un video CFR de esa cantidad de cuadros, así la
-duración es siempre exacta.
+Cada imagen única se compone una sola vez y se guarda en disco como JPEG.
+FFmpeg lee una lista concat (900 entradas que apuntan a esos JPEG) y codifica
+a 30 fps. Así Python y x264 no tienen que retener 900 PNG Full HD en RAM.
 """
 
 from __future__ import annotations
 
-import io
 import shutil
 import subprocess
-import threading
 from pathlib import Path
 from typing import Dict, List
 
@@ -22,13 +19,10 @@ from frame_plan import FramePlan
 from logger import get_logger
 from output_publisher import OutputPublishError, publish_video
 
-
-def _encode_png(frame: Image.Image) -> bytes:
-    buffer = io.BytesIO()
-    # compress_level bajo: el PNG solo viaja por una tubería local, así que
-    # importa la velocidad y no el tamaño.
-    frame.save(buffer, format="PNG", compress_level=1)
-    return buffer.getvalue()
+# Si configuration.json deja threads en 0, no usar todos los núcleos: cada hilo
+# de x264 reserva buffers extra y eso es lo que agotó la RAM en el estudio.
+_DEFAULT_ENCODER_THREADS = 2
+_JPEG_QUALITY = 92
 
 
 class RenderError(Exception):
@@ -54,6 +48,7 @@ class VideoRenderer:
         output_path = self._config.output.file_path(video.extension)
         temp_path = self._config.output.temp_file_path(video.extension)
         output_path.parent.mkdir(parents=True, exist_ok=True)
+        frames_dir = output_path.parent / f".{self._config.output.file_name}_frames"
 
         log = get_logger()
         log.info(
@@ -63,43 +58,21 @@ class VideoRenderer:
             video.duration_seconds,
             video.fps,
         )
-        encoded_frames = self._compose_frames(plan)
 
-        command = self._ffmpeg_command(temp_path, plan.total_frames)
-        log.debug("Comando FFmpeg: %s", " ".join(command))
-
-        process = subprocess.Popen(
-            command, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE
-        )
-        assert process.stdin is not None and process.stderr is not None
-
-        # stderr se lee en paralelo: si FFmpeg llenara la tubería de errores
-        # mientras nosotros escribimos cuadros, el proceso quedaría trabado.
-        stderr_chunks: List[bytes] = []
-        stderr_reader = threading.Thread(
-            target=lambda pipe: stderr_chunks.append(pipe.read()), args=(process.stderr,)
-        )
-        stderr_reader.start()
+        if frames_dir.exists():
+            shutil.rmtree(frames_dir, ignore_errors=True)
+        frames_dir.mkdir(parents=True, exist_ok=True)
 
         try:
-            for frame_path in plan.frames:
-                process.stdin.write(encoded_frames[frame_path])
-        except BrokenPipeError:
-            pass
-        finally:
-            if not process.stdin.closed:
-                try:
-                    process.stdin.close()
-                except BrokenPipeError:
-                    pass
-
-        return_code = process.wait()
-        stderr_reader.join()
-
-        if return_code != 0:
+            unique_files = self._compose_frames_to_disk(plan, frames_dir)
+            concat_path = frames_dir / "frames.txt"
+            _write_concat_list(plan, unique_files, concat_path)
+            self._run_ffmpeg(concat_path, temp_path, plan.total_frames)
+        except Exception:
             temp_path.unlink(missing_ok=True)
-            stderr_text = b"".join(stderr_chunks).decode("utf-8", errors="replace")
-            raise RenderError(f"FFmpeg terminó con código {return_code}: {stderr_text[-1500:]}")
+            raise
+        finally:
+            shutil.rmtree(frames_dir, ignore_errors=True)
 
         output_cfg = self._config.output
         try:
@@ -117,9 +90,9 @@ class VideoRenderer:
         log.info("Video generado: %s (%.2f MB)", published_path, size_mb)
         return published_path
 
-    def _compose_frames(self, plan: FramePlan) -> Dict[Path, bytes]:
+    def _compose_frames_to_disk(self, plan: FramePlan, frames_dir: Path) -> Dict[Path, Path]:
         video = self._config.video
-        encoded: Dict[Path, bytes] = {}
+        unique_files: Dict[Path, Path] = {}
         map_sizes: set[tuple[int, int]] = set()
 
         if video.mapas_fondo:
@@ -127,22 +100,28 @@ class VideoRenderer:
                 foreground = overlay.convert("RGBA").resize(
                     (video.width, video.height), Image.LANCZOS
                 )
-            for image_path in plan.unique_images():
-                encoded[image_path], size = self._compose_fullscreen(image_path, foreground)
+            for index, image_path in enumerate(plan.unique_images()):
+                frame, size = self._compose_fullscreen(image_path, foreground)
+                dest = frames_dir / f"u{index:03d}.jpg"
+                _save_jpeg(frame, dest)
+                unique_files[image_path] = dest
                 map_sizes.add(size)
             get_logger().info(
                 "Modo mapas_fondo: mapa a pantalla completa %sx%s con foreground",
                 video.width,
                 video.height,
             )
-            return encoded
+            return unique_files
 
         with Image.open(video.background) as background:
             canvas_base = background.convert("RGB").resize(
                 (video.width, video.height), Image.LANCZOS
             )
-            for image_path in plan.unique_images():
-                encoded[image_path], size = self._compose_centered(image_path, canvas_base)
+            for index, image_path in enumerate(plan.unique_images()):
+                frame, size = self._compose_centered(image_path, canvas_base)
+                dest = frames_dir / f"u{index:03d}.jpg"
+                _save_jpeg(frame, dest)
+                unique_files[image_path] = dest
                 map_sizes.add(size)
 
         get_logger().info(
@@ -151,11 +130,11 @@ class VideoRenderer:
             video.height,
             ", ".join(f"{width}x{height}" for width, height in sorted(map_sizes)),
         )
-        return encoded
+        return unique_files
 
     def _compose_centered(
         self, image_path: Path, canvas_base: Image.Image
-    ) -> tuple[bytes, tuple[int, int]]:
+    ) -> tuple[Image.Image, tuple[int, int]]:
         video = self._config.video
         try:
             with Image.open(image_path) as source:
@@ -171,11 +150,11 @@ class VideoRenderer:
             (video.height - map_image.height) // 2,
         )
         frame.paste(map_image, position)
-        return _encode_png(frame), (map_image.width, map_image.height)
+        return frame, (map_image.width, map_image.height)
 
     def _compose_fullscreen(
         self, image_path: Path, foreground: Image.Image
-    ) -> tuple[bytes, tuple[int, int]]:
+    ) -> tuple[Image.Image, tuple[int, int]]:
         video = self._config.video
         canvas_size = (video.width, video.height)
         try:
@@ -189,9 +168,25 @@ class VideoRenderer:
             frame = Image.alpha_composite(frame, foreground)
         else:
             frame.paste(foreground.convert("RGBA"), (0, 0))
-        return _encode_png(frame.convert("RGB")), canvas_size
+        return frame.convert("RGB"), canvas_size
 
-    def _ffmpeg_command(self, output_path: Path, total_frames: int) -> List[str]:
+    def _run_ffmpeg(self, concat_path: Path, output_path: Path, total_frames: int) -> None:
+        command = self._ffmpeg_command(concat_path, output_path, total_frames)
+        get_logger().debug("Comando FFmpeg: %s", " ".join(command))
+        completed = subprocess.run(command, capture_output=True)
+        if completed.returncode != 0:
+            stderr_text = completed.stderr.decode("utf-8", errors="replace")
+            raise RenderError(
+                f"FFmpeg terminó con código {completed.returncode}: {stderr_text[-1500:]}"
+            )
+
+    def _encoder_threads(self) -> int:
+        configured = self._config.video.threads
+        if configured > 0:
+            return configured
+        return _DEFAULT_ENCODER_THREADS
+
+    def _ffmpeg_command(self, concat_path: Path, output_path: Path, total_frames: int) -> List[str]:
         video = self._config.video
         command = [
             self._ffmpeg,
@@ -200,13 +195,13 @@ class VideoRenderer:
             "-loglevel",
             "error",
             "-f",
-            "image2pipe",
-            "-vcodec",
-            "png",
-            "-framerate",
+            "concat",
+            "-safe",
+            "0",
+            "-r",
             str(video.fps),
             "-i",
-            "-",
+            str(concat_path),
             "-an",
             "-c:v",
             video.codec,
@@ -218,12 +213,25 @@ class VideoRenderer:
             str(video.fps),
             "-frames:v",
             str(total_frames),
+            "-threads",
+            str(self._encoder_threads()),
             "-movflags",
             "+faststart",
         ]
         if video.codec.startswith("libx26"):
             command += ["-preset", video.preset]
-        if video.threads > 0:
-            command += ["-threads", str(video.threads)]
         command.append(str(output_path))
         return command
+
+
+def _save_jpeg(frame: Image.Image, path: Path) -> None:
+    frame.convert("RGB").save(path, format="JPEG", quality=_JPEG_QUALITY, optimize=False)
+
+
+def _write_concat_list(plan: FramePlan, unique_files: Dict[Path, Path], concat_path: Path) -> None:
+    """Una línea por cuadro. Las rutas son relativas al archivo concat (nombres cortos)."""
+    lines = ["ffconcat version 1.0\n"]
+    for source in plan.frames:
+        jpeg_path = unique_files[source]
+        lines.append(f"file '{jpeg_path.name}'\n")
+    concat_path.write_text("".join(lines), encoding="utf-8")

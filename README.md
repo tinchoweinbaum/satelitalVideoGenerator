@@ -85,7 +85,7 @@ acumulan errores de redondeo. FFmpeg recibe esos 900 cuadros y los codifica a
 | `preset` | Velocidad de codificación de x264 (`ultrafast` a `veryslow`) |
 | `pixelFormat` | Formato de color (`yuv420p` para máxima compatibilidad) |
 | `extension` | Extensión del archivo final |
-| `threads` | Núcleos para FFmpeg (`0` = automático) |
+| `threads` | Núcleos para x264. El valor por defecto es `2`. `0` también usa 2 (no todos los núcleos): en una PC de playout eso evita que el encoder se quede sin RAM |
 | `mapas_fondo` | `false`: mapa centrado sobre el fondo. `true`: mapa a pantalla completa con un primer plano encima |
 | `background` | Imagen de fondo (se usa cuando `mapas_fondo` es `false`) |
 | `foreground` | Imagen de primer plano (se usa cuando `mapas_fondo` es `true`). Si no se indica, se busca `foreground.png` en la misma carpeta que el fondo |
@@ -179,6 +179,8 @@ Lista ordenada de satélites; el orden es el que se ve en el video.
 **El video no se genera y el log dice que no se pudo descargar ninguna imagen.**
 Cloudflare está bloqueando la conexión. Verificá que Playwright esté instalado
 (`install.bat`) y que `useBrowserFallback` esté en `true`.
+
+**x264 malloc failed / el ciclo muere al renderizar.** El encoder se quedó sin RAM (vMix + Chrome + FFmpeg a 1080p). El programa ahora guarda los cuadros en disco y limita x264 a 2 hilos. Si igual falla, cerrá vMix un momento y revisá que FFmpeg sea de 64 bits (`ffmpeg -version`).
 
 **WinError 5 / Acceso denegado al guardar `mapas.mp4`.**
 Otro programa tiene el archivo abierto, casi siempre **vMix** o la vista previa del
