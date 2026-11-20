@@ -56,8 +56,15 @@ def check_environment(config: Config) -> int:
     log = get_logger()
     problems = []
 
-    if shutil.which("ffmpeg") is None:
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg is None:
         problems.append("No se encontró 'ffmpeg' en el PATH")
+    else:
+        from renderer import inspect_ffmpeg_architecture
+
+        warning = inspect_ffmpeg_architecture(ffmpeg)
+        if warning:
+            log.warning(warning)
     if config.video.mapas_fondo:
         if not config.video.foreground.is_file():
             problems.append(f"Falta la imagen de primer plano: {config.video.foreground}")
