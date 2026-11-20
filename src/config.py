@@ -123,6 +123,7 @@ class DownloadConfig:
     delay_between_downloads_seconds: float
     use_browser_fallback: bool
     developer_mode: bool
+    max_consecutive_failures: int = 3
 
 
 @dataclass(frozen=True)
@@ -218,10 +219,10 @@ def load_config(path: Path | None = None) -> Config:
         duration_seconds=int(video_raw.get("durationSeconds", 30)),
         codec=str(video_raw.get("codec", "libx264")),
         bitrate=str(video_raw.get("bitrate", "5000k")),
-        preset=str(video_raw.get("preset", "veryfast")),
+        preset=str(video_raw.get("preset", "ultrafast")),
         pixel_format=str(video_raw.get("pixelFormat", "yuv420p")),
         extension=str(video_raw.get("extension", ".mp4")),
-        threads=int(video_raw.get("threads", 2)),
+        threads=int(video_raw.get("threads", 1)),
         background=background,
         foreground=foreground,
         mapas_fondo=_as_bool(video_raw.get("mapas_fondo", False), "video.mapas_fondo"),
@@ -284,6 +285,7 @@ def load_config(path: Path | None = None) -> Config:
         delay_between_downloads_seconds=float(download_raw.get("delayBetweenDownloadsSeconds", 1.0)),
         use_browser_fallback=bool(download_raw.get("useBrowserFallback", True)),
         developer_mode=bool(download_raw.get("developerMode", False)),
+        max_consecutive_failures=int(download_raw.get("maxConsecutiveFailures", 3)),
     )
 
     schedule_raw = _section(data, "schedule")
@@ -367,6 +369,11 @@ def _validate(config: Config) -> None:
             f"{video.total_frames} cuadros ({video.fps} fps x {video.duration_seconds} s). "
             "Reducí sequence.bufferSize o sequence.sequenceRepeats, o subí video.durationSeconds."
         )
+
+    if config.download.max_retries <= 0:
+        raise ConfigError("download.maxRetries debe ser mayor a cero")
+    if config.download.max_consecutive_failures <= 0:
+        raise ConfigError("download.maxConsecutiveFailures debe ser mayor a cero")
 
     for minute in config.schedule.cron_minutes:
         if not 0 <= minute <= 59:

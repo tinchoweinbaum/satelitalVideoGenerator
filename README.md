@@ -82,10 +82,10 @@ acumulan errores de redondeo. FFmpeg recibe esos 900 cuadros y los codifica a
 | `durationSeconds` | Duración exacta en segundos |
 | `codec` | Códec de video (`libx264` recomendado para vMix) |
 | `bitrate` | Calidad: más bitrate, más calidad y más peso |
-| `preset` | Velocidad de codificación de x264 (`ultrafast` a `veryslow`) |
+| `preset` | Velocidad de x264. El encode real usa `ultrafast` y `tune=stillimage` para no quedarse sin RAM |
 | `pixelFormat` | Formato de color (`yuv420p` para máxima compatibilidad) |
 | `extension` | Extensión del archivo final |
-| `threads` | Núcleos para x264. El valor por defecto es `2`. `0` también usa 2 (no todos los núcleos): en una PC de playout eso evita que el encoder se quede sin RAM |
+| `threads` | Núcleos para x264. El valor se limita a `1` aunque pongas más: en la PC de playout más hilos hacen que x264 falle con `malloc` |
 | `mapas_fondo` | `false`: mapa centrado sobre el fondo. `true`: mapa a pantalla completa con un primer plano encima |
 | `background` | Imagen de fondo (se usa cuando `mapas_fondo` es `false`) |
 | `foreground` | Imagen de primer plano (se usa cuando `mapas_fondo` es `true`). Si no se indica, se busca `foreground.png` en la misma carpeta que el fondo |
@@ -151,9 +151,10 @@ Lista ordenada de satélites; el orden es el que se ve en el video.
 |-------|-------------|
 | `bufferDir` | Carpeta del buffer de imágenes |
 | `requestTimeoutSeconds` | Tiempo máximo de espera por pedido |
-| `maxRetries` | Intentos por imagen |
+| `maxRetries` | Intentos por imagen (solo HTTP directo; el navegador se prueba una vez) |
 | `delayBetweenDownloadsSeconds` | Pausa entre descargas |
 | `useBrowserFallback` | Usar el navegador cuando Cloudflare bloquea |
+| `maxConsecutiveFailures` | Si fallan N archivos seguidos, se corta el resto del ciclo y se arma el video con el buffer |
 | `developerMode` | `true` muestra el navegador; `false` lo deja oculto |
 
 ### schedule

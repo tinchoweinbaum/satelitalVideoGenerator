@@ -6,10 +6,10 @@
         "durationSeconds": 30,
         "codec": "libx264",
         "bitrate": "8000k",
-        "preset": "veryfast",
+        "preset": "ultrafast",
         "pixelFormat": "yuv420p",
         "extension": ".mp4",
-        "threads": 2,
+        "threads": 1,
         "mapas_fondo": false,
         "background": "src/resources/background.jpg",
         "foreground": "src/resources/foreground.png"
@@ -55,6 +55,7 @@
         "maxRetries": 3,
         "delayBetweenDownloadsSeconds": 1.0,
         "useBrowserFallback": true,
+        "maxConsecutiveFailures": 3,
         "developerMode": false
     },
     "schedule": {

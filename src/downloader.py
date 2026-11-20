@@ -5,13 +5,17 @@ El host está detrás de Cloudflare, así que hay dos caminos:
   2. Navegador real vía Playwright, que resuelve el desafío de Cloudflare.
 
 Siempre se descargan los bytes originales del JPG: nunca capturas de pantalla.
+
+Si Cloudflare (o la red) falla varias veces seguidas, el ciclo se corta: no se
+abre Chrome por cada archivo faltante. Eso era lo que vaciaba la RAM del estudio
+antes de que FFmpeg siquiera empezara a codificar.
 """
 
 from __future__ import annotations
 
 import io
 import time
-from typing import Optional
+from typing import Optional, Tuple
 
 import httpx
 from PIL import Image, UnidentifiedImageError
@@ -36,6 +40,7 @@ _IMAGE_HEADERS = {
 
 _MIN_IMAGE_BYTES = 2048
 _CHALLENGE_MARKERS = (b"just a moment", b"un momento", b"cf-mitigated", b"<html")
+_BLOCKED_STATUS = {401, 403, 503}
 
 
 class ImageDownloader:
@@ -47,6 +52,21 @@ class ImageDownloader:
         self._client = client
         self._browser: Optional["_BrowserSession"] = None
         self._browser_unavailable = False
+        self._browser_gave_up = False
+        self._consecutive_failures = 0
+        self._skip_remaining = False
+
+    @property
+    def skipping_remaining(self) -> bool:
+        """True cuando este ciclo ya cortó las descargas y debe usar el buffer."""
+        return self._skip_remaining
+
+    def begin_cycle(self) -> None:
+        """Arranca un ciclo de sync: se vuelve a intentar, pero Chrome parte cerrado."""
+        self._consecutive_failures = 0
+        self._skip_remaining = False
+        self._browser_gave_up = False
+        self.close()
 
     def close(self) -> None:
         if self._browser is not None:
@@ -54,17 +74,22 @@ class ImageDownloader:
             self._browser = None
 
     def download(self, filename: str) -> Optional[bytes]:
+        if self._skip_remaining:
+            return None
+
         url = f"{self._smn.static_base_url}/{filename}"
         log = get_logger()
+        content: Optional[bytes] = None
+        blocked = False
 
         for attempt in range(1, self._download.max_retries + 1):
-            content = self._fetch_direct(url)
-            if content is None and self._download.use_browser_fallback:
-                content = self._fetch_with_browser(url)
-
+            content, blocked = self._fetch_direct(url)
             if content is not None:
-                return content
-
+                break
+            if blocked:
+                # Cloudflare/403 no se arregla esperando 2s y 4s: no tiene sentido
+                # repetir el mismo GET tres veces.
+                break
             if attempt < self._download.max_retries:
                 wait = 2 ** attempt
                 log.warning(
@@ -76,25 +101,68 @@ class ImageDownloader:
                 )
                 time.sleep(wait)
 
-        log.error("No se pudo descargar %s después de %s intentos", filename, self._download.max_retries)
+        if content is None and self._should_use_browser():
+            content = self._fetch_with_browser(url)
+            if content is not None:
+                self._import_browser_cookies()
+            else:
+                self._browser_gave_up = True
+                self.close()
+                log.warning(
+                    "El navegador no pudo bajar %s. No se vuelve a abrir Chrome en este ciclo",
+                    filename,
+                )
+
+        if content is not None:
+            self._consecutive_failures = 0
+            return content
+
+        self._consecutive_failures += 1
+        log.error(
+            "No se pudo descargar %s después de %s intentos",
+            filename,
+            self._download.max_retries,
+        )
+        if self._consecutive_failures >= self._download.max_consecutive_failures:
+            self._skip_remaining = True
+            log.warning(
+                "Se cortó la descarga: %s archivos fallaron seguidos. "
+                "Se usa el buffer actual y no se sigue pidiendo al SMN en este ciclo",
+                self._consecutive_failures,
+            )
+            self.close()
         return None
 
-    def _fetch_direct(self, url: str) -> Optional[bytes]:
+    def _should_use_browser(self) -> bool:
+        return (
+            self._download.use_browser_fallback
+            and not self._browser_unavailable
+            and not self._browser_gave_up
+        )
+
+    def _fetch_direct(self, url: str) -> Tuple[Optional[bytes], bool]:
+        """Devuelve (bytes, bloqueado_por_cloudflare)."""
         try:
             response = self._client.get(url, headers=_IMAGE_HEADERS)
         except httpx.HTTPError as exc:
             get_logger().debug("HTTP directo falló para %s: %s", url, exc)
-            return None
+            return None, False
+
+        if response.status_code in _BLOCKED_STATUS:
+            get_logger().debug("HTTP directo devolvió %s para %s", response.status_code, url)
+            return None, True
 
         if response.status_code != 200:
             get_logger().debug("HTTP directo devolvió %s para %s", response.status_code, url)
-            return None
+            return None, False
 
-        return _validated(response.content, url)
+        if _looks_like_challenge(response.content):
+            get_logger().debug("El servidor devolvió una página de desafío para %s", url)
+            return None, True
+
+        return _validated(response.content, url), False
 
     def _fetch_with_browser(self, url: str) -> Optional[bytes]:
-        if self._browser_unavailable:
-            return None
         if self._browser is None:
             try:
                 self._browser = _BrowserSession(headless=not self._download.developer_mode)
@@ -116,13 +184,31 @@ class ImageDownloader:
 
         return _validated(content, url) if content else None
 
+    def _import_browser_cookies(self) -> None:
+        if self._browser is None:
+            return
+        try:
+            for cookie in self._browser.cookies():
+                name = cookie.get("name")
+                value = cookie.get("value")
+                if not name or value is None:
+                    continue
+                domain = (cookie.get("domain") or "").lstrip(".")
+                self._client.cookies.set(name, value, domain=domain or None)
+        except Exception as exc:  # noqa: BLE001 - si no se copian, el HTTP directo sigue igual
+            get_logger().debug("No se pudieron copiar las cookies del navegador: %s", exc)
+
+
+def _looks_like_challenge(content: bytes) -> bool:
+    head = content[:2048].lower()
+    return any(marker in head for marker in _CHALLENGE_MARKERS)
+
 
 def _validated(content: bytes, url: str) -> Optional[bytes]:
     """Confirma que los bytes sean realmente una imagen y no una página de error."""
     log = get_logger()
     if len(content) < _MIN_IMAGE_BYTES:
-        head = content[:200].lower()
-        if any(marker in head for marker in _CHALLENGE_MARKERS):
+        if _looks_like_challenge(content):
             log.debug("El servidor devolvió una página de desafío para %s", url)
         else:
             log.debug("Respuesta demasiado chica (%s bytes) para %s", len(content), url)
@@ -147,7 +233,11 @@ class _BrowserSession:
         from playwright.sync_api import sync_playwright
 
         self._playwright = sync_playwright().start()
-        launch_args = ["--no-sandbox", "--disable-dev-shm-usage", "--disable-blink-features=AutomationControlled"]
+        launch_args = [
+            "--no-sandbox",
+            "--disable-dev-shm-usage",
+            "--disable-blink-features=AutomationControlled",
+        ]
         try:
             self._browser = self._playwright.chromium.launch(
                 channel="chrome", headless=headless, args=launch_args
@@ -164,6 +254,9 @@ class _BrowserSession:
             "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
         )
         self._page = self._context.new_page()
+
+    def cookies(self) -> list:
+        return self._context.cookies()
 
     def fetch(self, url: str, timeout_seconds: float) -> Optional[bytes]:
         timeout_ms = int(timeout_seconds * 1000)

@@ -56,6 +56,7 @@ class Pipeline:
         """Descarga las imágenes nuevas de cada satélite. Devuelve cuántas bajó."""
         log = get_logger()
         downloaded = 0
+        self._downloader.begin_cycle()
 
         for satellite in self._config.satellites:
             store = self._buffers[satellite.name]
@@ -73,12 +74,28 @@ class Pipeline:
                 len(missing),
             )
 
+            if self._downloader.skipping_remaining and missing:
+                log.warning(
+                    "[%s] Se omiten %s descargas; se arma el video con el buffer actual",
+                    satellite.name,
+                    len(missing),
+                )
+                store.prune()
+                continue
+
             for index, filename in enumerate(missing):
+                if self._downloader.skipping_remaining:
+                    log.warning(
+                        "[%s] Se omiten %s descargas restantes; se arma el video con el buffer actual",
+                        satellite.name,
+                        len(missing) - index,
+                    )
+                    break
                 content = self._downloader.download(filename)
                 if content:
                     store.save(filename, content)
                     downloaded += 1
-                if index < len(missing) - 1:
+                if index < len(missing) - 1 and not self._downloader.skipping_remaining:
                     time.sleep(self._config.download.delay_between_downloads_seconds)
 
             store.prune()
